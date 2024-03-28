@@ -4,25 +4,31 @@ import ssl
 import requests
 import json
 
+# Import Scrape module
+import scrape
+
 # IP Address of AdGuard Home Instance
-host = "http://192.168.1.1:8083" # "http(s)://<adguardHomeIp:<port>"
+host = "http://192.168.1.1:8083"
 
 # User Credentials
-userName = "root" # Username
-password = "password" # Password
+userName = "root"
+password = "password"
 
 # Block List URLs
-url = "https://v.firebog.net/hosts/lists.php?type=tick"
-block_urls = (requests.get(url, allow_redirects=True).text).splitlines()
+block_url = "https://v.firebog.net/hosts/lists.php?type=tick"
+block_urls = requests.get(block_url).text.splitlines()
+
+# Whitelist URL and pattern
+whitelist_url = "https://github.com/anudeepND/whitelist"
+whitelist_url_pattern = r"^https:\/\/raw\.githubusercontent\.com\/([a-zA-Z0-9]+)\/whitelist\/master\/domains$"
+
+# Scrape whitelist URLs
+matching_links = scrape.scrape_links(whitelist_url, whitelist_url_pattern)
 
 # Allow List URLs
-allow_urls = [
-  "https://raw.githubusercontent.com/anudeepND/whitelist/master/domains/whitelist.txt",
-  "https://raw.githubusercontent.com/anudeepND/whitelist/master/domains/referral-sites.txt",
-  "https://raw.githubusercontent.com/anudeepND/whitelist/master/domains/optional-list.txt",
-]
+allow_urls = list(matching_links)
 
-# Open TLSv1 Adapter
+# Adapter for TLSv1
 class MyAdapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
         self.poolmanager = PoolManager(num_pools=connections,
@@ -30,23 +36,24 @@ class MyAdapter(HTTPAdapter):
                                        block=block,
                                        ssl_version=ssl.PROTOCOL_TLSv1)
 
-headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 6.1; WOW64; rv:52.0) Gecko/20100101 Firefox/52.0', 'Content-Type': 'application/json'}     
-
+# Reuse session and adapter
 s = requests.Session()
 s.mount(host, MyAdapter())
-x = s.post(host + "/control/login", json.dumps({"name": userName, "password" : password}), headers=headers)
-print(x.text)
 
-# Cycle through block lists
+# Login
+login_payload = json.dumps({"name": userName, "password": password})
+headers = {'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json'}
+response = s.post(f"{host}/control/login", data=login_payload, headers=headers)
+print(response.text)
+
+# Combine filter objects for block and allow lists
+filter_objects = []
 for u in block_urls:
-	filterObj = json.dumps({'url':u, "name":u,"whitelist":False})
-	print(filterObj)
-	x = s.post(host + "/control/filtering/add_url", data = filterObj, headers=headers)
-	print(x.text)
-
-# Cycle through allow lists
+    filter_objects.append({'url': u, "name": u, "whitelist": False})
 for u in allow_urls:
-	filterObj = json.dumps({'url':u, "name":u,"whitelist":True})
-	print(filterObj)
-	x = s.post(host + "/control/filtering/add_url", data = filterObj, headers=headers)
-	print(x.text)
+    filter_objects.append({'url': u, "name": u, "whitelist": True})
+
+# Send bulk requests
+bulk_payload = json.dumps(filter_objects)
+response = s.post(f"{host}/control/filtering/add_urls", data=bulk_payload, headers=headers)
+print(response.text)
