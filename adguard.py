@@ -1,18 +1,14 @@
-from requests.adapters import HTTPAdapter
-from urllib3.poolmanager import PoolManager
 import ssl
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 import json
-
-# Import Scrape module
 import scrape
 
-# IP Address of AdGuard Home Instance
-host = "http://192.168.1.1:8083"
-
-# User Credentials
-userName = "root"
-password = "password"
+# Prompt user for input
+host = input("Enter the IP address of the AdGuard Home instance (e.g., http://192.168.1.1:8083): ")
+userName = input("Enter the username: ")
+password = input("Enter the password: ")
 
 # Block List URLs
 block_url = "https://v.firebog.net/hosts/lists.php?type=tick"
@@ -23,37 +19,44 @@ whitelist_url = "https://github.com/anudeepND/whitelist"
 whitelist_url_pattern = r"^https:\/\/raw\.githubusercontent\.com\/([a-zA-Z0-9]+)\/whitelist\/master\/domains$"
 
 # Scrape whitelist URLs
-matching_links = scrape.scrape_links(whitelist_url, whitelist_url_pattern)
+allow_urls = list(scrape.scrape_links(whitelist_url, whitelist_url_pattern))
 
-# Allow List URLs
-allow_urls = list(matching_links)
-
-# Adapter for TLSv1
+# Open TLSv1 Adapter
 class MyAdapter(HTTPAdapter):
     def init_poolmanager(self, connections, maxsize, block=False):
-        self.poolmanager = PoolManager(num_pools=connections,
-                                       maxsize=maxsize,
-                                       block=block,
-                                       ssl_version=ssl.PROTOCOL_TLSv1)
+        self.poolmanager = PoolManager(num_pools=connections, maxsize=maxsize, block=block, ssl_version=ssl.PROTOCOL_TLSv1)
 
-# Reuse session and adapter
-s = requests.Session()
-s.mount(host, MyAdapter())
+# Function to create session and login
+def create_session_and_login(host, userName, password):
+    s = requests.Session()
+    s.mount(host, MyAdapter())
+    login_payload = json.dumps({"name": userName, "password": password})
+    headers = {'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json'}
+    response = s.post(f"{host}/control/login", data=login_payload, headers=headers)
+    
+    if response.status_code == 200:
+        print("Login successful.")
+        return s
+    else:
+        print(f"Login failed. Status code: {response.status_code}")
+        return None
 
-# Login
-login_payload = json.dumps({"name": userName, "password": password})
-headers = {'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json'}
-response = s.post(f"{host}/control/login", data=login_payload, headers=headers)
-print(response.text)
+# Function to add URLs
+def add_urls(session, host, urls, whitelist):
+    headers = {'User-Agent': 'Mozilla/5.0', 'Content-Type': 'application/json'}
+    for url in urls:
+        filter_obj = json.dumps({'url': url, 'name': url, 'whitelist': whitelist})
+        response = session.post(f"{host}/control/filtering/add_url", data=filter_obj, headers=headers)
+        print(response.text)
 
-# Combine filter objects for block and allow lists
-filter_objects = []
-for u in block_urls:
-    filter_objects.append({'url': u, "name": u, "whitelist": False})
-for u in allow_urls:
-    filter_objects.append({'url': u, "name": u, "whitelist": True})
+# Create session and login
+session = create_session_and_login(host, userName, password)
 
-# Send bulk requests
-bulk_payload = json.dumps(filter_objects)
-response = s.post(f"{host}/control/filtering/add_urls", data=bulk_payload, headers=headers)
-print(response.text)
+if session:
+    # Add blocklist URLs
+    add_urls(session, host, block_urls, whitelist=False)
+    
+    # Add allowlist URLs
+    add_urls(session, host, allow_urls, whitelist=True)
+else:
+    print("Exiting due to login failure.")
